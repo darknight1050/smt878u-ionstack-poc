@@ -1,0 +1,8 @@
+/build/
+/results/
+/scratch/
+/.local-baselines/
+.DS_Store
+*.log
+*.swp
+*~

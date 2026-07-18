@@ -1,0 +1,17 @@
+smt878u-ionstack-poc
+
+This distribution contains code derived from the upstream IonStack
+CVE-2026-43499 source snapshot and from the xpad2-ionstack-poc packaging
+layout, originally redistributed under the Apache License 2.0 /
+GPL-3.0-or-later dual-provenance model. The Apache License 2.0 text is
+preserved in licenses/Apache-2.0.txt.
+
+Files under src/exploit/ and tools/su_daemon.c retain IonStack provenance
+and are redistributed under Apache-2.0. Modifications for the SM-T878U
+(gts7l) port and the project as a combined work are distributed under
+GPL-3.0-or-later, without removing any rights or notices granted by
+Apache-2.0.
+
+The futex hashing helper also contains copyright notices for Bob Jenkins
+and Jozsef Kadlecsik; those notices remain in
+src/exploit/kernelsnitch/futex_hash.h.
