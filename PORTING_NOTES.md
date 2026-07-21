@@ -966,23 +966,39 @@ back `/proc/sys/kernel/random/boot_id` after and logs it alongside the
 expected leak value/target. This is what produced the clean negative
 result above.
 
-**Found (not yet fixed for the real path): a page-reuse-corruption bug**.
-`IONSTACK_UTS_TEST_ATTEMPTS`'s retry loop reuses the *same* prepared
-page (`page_base`/`fake_lock`) across attempts, but a single successful
-`EDEADLK`-triggered pass through `rt_mutex_adjust_prio_chain()`
-**permanently mutates** `lock`'s memory: `rt_mutex_dequeue()`/`enqueue()`
-(the `tree_entry` calls, which run unconditionally regardless of
-`owner`) update `lock->waiters.rb_leftmost` to point at *that attempt's*
-dangling waiter. Never reset before the next attempt, whose very first
-`rt_mutex_top_waiter(lock)` call dereferences the now-stale pointer
-(pointing into a long-dead thread's stack) and crashes. Explains why
-attempt 1 (fresh page) never crashed in this session's testing but later
-attempts often did, independent of whichever hypothesis was being
-tested. **Not fixed** in the real exploit's `prepare_good_kernel_page()`-
-based path -- only worked around during testing via `...ATTEMPTS=1`. Real
-fix: re-prime just `RTMUTEX_WAITERS_ROOT_OFF`/`LEFTMOST_OFF` back to `0`
-(cheap two-`put64`) before each retry, in both the bypass and the real
-path.
+**Found and fixed: a page-reuse-corruption bug.** `IONSTACK_UTS_TEST_ATTEMPTS`'s
+retry loop reused the *same* prepared page (`page_base`/`fake_lock`)
+across attempts, but a single successful `EDEADLK`-triggered pass through
+`rt_mutex_adjust_prio_chain()` **permanently mutates** `lock`'s memory:
+`rt_mutex_dequeue()`/`enqueue()` (the `tree_entry` calls, which run
+unconditionally regardless of `owner`) update `lock->waiters.rb_leftmost`
+to point at *that attempt's* dangling waiter. Never reset before the next
+attempt, whose very first `rt_mutex_top_waiter(lock)` call dereferenced
+the now-stale pointer (pointing into a long-dead thread's stack) and
+crashed. Explained why attempt 1 (fresh page) never crashed but later
+attempts often did, independent of whichever hypothesis was being tested.
+
+`fops.c`'s `do_ptrace_fake_lock_route()` already had the right pattern for
+this (re-preps the page on every attempt after the first) -- mirrored it:
+extracted the page-prep branch (`IONSTACK_QEMU_REAL_PAGE`/
+`IONSTACK_SKIP_PAGE_PREP`/real `prepare_good_kernel_page()`) into
+`slide_uts_prepare_page()`, called once before the loop and again at the
+top of every subsequent iteration. For `IONSTACK_QEMU_REAL_PAGE`, the
+expensive part (mmap+`/proc/self/pagemap` scan for a physically-
+contiguous region) is cached in static locals across calls -- re-priming
+just re-runs `prepare_skb_payload_into_region()` on the already-found
+region, which is the part that actually needs to be fresh (the
+*content*, not the address, is what a trigger mutates). The real
+`prepare_good_kernel_page()` path has no such shortcut (KernelSnitch's
+groomed page isn't otherwise directly user-writable) and re-grooms fully
+on every call -- same cost `fops.c`'s route already accepts.
+
+Live-tested in QEMU post-fix: 4 consecutive attempts (mix of `EDEADLK`
+and race-miss outcomes), zero crashes -- previously attempt 2+ almost
+always crashed with this exact bug. Confirms the fix. (Did not change the
+separate, still-open "why doesn't the write land" question -- this bug
+was masking/corrupting later attempts' results, not causing the missing
+write itself, which attempt 1 already showed independent of this bug.)
 
 **Post-spray "grace period" fix** (`slide_ptrace_stack_copy()`, applied
 permanently to the real code path): once the spray loop detects
